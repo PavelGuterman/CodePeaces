@@ -1,0 +1,389 @@
+using System;
+using System.Linq;
+using BillGoldBusinessLogic.DB;
+using BillGoldBusinessLogic.JobScheduler.Base;
+using FrameWork;
+using FrameWork.Massages;
+
+namespace BillGoldBusinessLogic.JobScheduler
+{
+    public abstract class JobSchedulerBaseBase
+    {
+        public bool RunInAsync { get; set; } = false;
+        internal abstract void Run();
+    }
+
+    public class JobSchedulerBase<TP> : JobSchedulerBaseBase where TP : JobSchedulerParametersBase<TP>, new()
+    {
+
+        protected delegate void FillDefaultValues(DB.JobScheduler jobScheduler);
+        public DB.JobScheduler JobScheduler;
+        public TP Parameters = new TP();
+        protected JobTaskType JobType;
+        private Entities _db = GlobDB.GetNewEntities();
+
+        protected int CompanyNumber;
+        protected int TerminalNumber;
+
+
+
+        /// <summary>
+        /// Use Exsisting JobScheduler
+        /// </summary>
+        /// <param name="jobScheduler"></param>
+        /// <param name="type"></param>
+        protected JobSchedulerBase(DB.JobScheduler jobScheduler)
+        {
+            SetJobScheduler(jobScheduler);
+
+        }
+
+        private void SetJobScheduler(DB.JobScheduler jobScheduler)
+        {
+            this.JobScheduler = jobScheduler;
+            // Requiter Vars at start
+            this.CompanyNumber = jobScheduler.CompanyNumber;
+            this.TerminalNumber = jobScheduler.TerminalNumber;
+            JobType = (JobTaskType)jobScheduler.JobTypeToRun;
+            // end requierd var at start
+
+            Parameters = JobSchedulerParametersBase<TP>.GetFromXML(jobScheduler.JobParameters);
+        }
+
+        /// <summary>
+        /// Load JobScheduler For DB
+        /// </summary>
+        /// <param name="companyNumber"></param>
+        /// <param name="terminalNumber"></param>
+        /// <param name="jobTaskType"></param>
+        /// <param name="defaultValuesFunction"> </param>
+        protected JobSchedulerBase(int companyNumber, int terminalNumber, JobTaskType jobTaskType, FillDefaultValues defaultValuesFunction)
+        {
+            // Requiter Vars at start
+
+            this.CompanyNumber = companyNumber;
+            this.TerminalNumber = terminalNumber;
+            this.JobType = jobTaskType;
+            // end requierd var at start
+
+            using (var db = GlobDB.GetNewEntities())
+            {
+                DB.JobScheduler update = db.JobScheduler.FirstOrDefault(
+                a => a.TerminalNumber == terminalNumber
+                    && a.CompanyNumber == companyNumber
+                    && a.JobTypeToRun == (int)JobType);
+
+                if (update == null)
+                {
+                    update = GetNewJobScheduler();
+                    defaultValuesFunction(update);
+                }
+
+                this.JobScheduler = update;
+                Parameters = JobSchedulerParametersBase<TP>.GetFromXML(update.JobParameters);
+            }
+        }
+        public bool IsDebug = false;
+        public virtual void RunDebugONLY()
+        {
+            IsDebug = true;
+            Run();
+            IsDebug = false;
+        }
+
+        internal override void Run()
+        {
+            try
+            {
+                if (JobScheduler == null || JobScheduler.ID == 0)
+                    throw new Exception("To Run a job you need to save the DB.JobScheduler to DB befor runing -OR- user the JobSchedulerBase(DB.JobScheduler jobScheduler) constractor");
+                OnMarkStartStarting();
+                Start();
+                OnMarkStartStarted();
+                try
+                {
+
+
+                    OnRunJob();
+
+
+                }
+                catch (Exception ex)
+                {
+                    WriteExceptionToLog(ex);
+                }
+                try
+                {
+                    OnMarEndStarting();
+                }
+                catch (Exception ex)
+                {
+                    WriteExceptionToLog(ex);
+                }
+
+                End();
+                OnMarkEndStarted();
+            }
+            finally
+            {
+                this.Dispose();
+            }
+        }
+        #region Helpers
+        /// <summary>
+        /// מחזיר את תאריך הבא לפי זמן ריצה בלבד
+        /// </summary>
+        /// <param name="TimeOfDay"></param>
+        /// <returns></returns>
+        public static DateTime GetNetTimeToRunByTimeOnly(TimeSpan TimeOfDay)
+        {
+            DateTime dtn = DateTime.Now;
+            dtn = new DateTime(dtn.Year, dtn.Month, dtn.Day, 0, 0, 0, 0).AddTicks(TimeOfDay.Ticks); // היום באותה שעה
+            if (TimeOfDay.Ticks < DateTime.Now.TimeOfDay.Ticks) // מחר
+            {
+                dtn = dtn.AddDays(1);
+            }
+            return dtn;
+
+        }
+        #endregion
+
+        #region Update Job
+
+        public DB.JobScheduler GetNewJobScheduler()
+        {
+            return new DB.JobScheduler
+            {
+                CompanyNumber = CompanyNumber,
+                TerminalNumber = TerminalNumber,
+                LestRunDate = null,
+                IsRunning = false,
+                JobTypeToRun = (int)JobType,
+                JobParameters = new TP().GetXML()
+            };
+        }
+
+        /// <summary>
+        /// update exsisting / non exsisting Job
+        /// </summary>
+        /// <param name="userID"></param>
+        /// <param name="nextRunDate"></param>
+        /// <param name="isActive"></param>
+        /// <param name="isRecursive"></param>
+        /// <param name="runEvery"></param>
+        /// <param name="Params"></param>
+        /// <param name="jobType"></param>
+        /// <param name="defaultValuesFunction"></param>
+        /// <returns></returns>
+        protected AddJobResponse UpdateJobScheduler(int userID,
+            DateTime nextRunDate,
+            bool isActive,
+            bool isRecursive,
+            TimeSpan? runEvery,
+            TP Params,
+            FillDefaultValues defaultValuesFunction)
+        {
+            using (Entities db = GlobDB.GetNewEntities())
+            {
+                // Get Form DataBase
+                DB.JobScheduler update = db.JobScheduler.FirstOrDefault(
+                                a => a.TerminalNumber == TerminalNumber
+                                    && a.CompanyNumber == CompanyNumber
+                                    && a.JobTypeToRun == (int)JobType);
+
+
+                if (update == null) // Create New in there is non in data Base
+                {
+                    update = GetNewJobScheduler();
+                    defaultValuesFunction(update);
+                    db.JobScheduler.AddObject(update);
+                }
+
+                if (update.IsRunning)
+                {
+                    return new AddJobResponse { IsOK = false, ErroeMassage = "המשימה רצה , אנא המתן שתסתיים!" };
+                }
+
+
+                // UpdateInformation
+                update.UserID = userID;
+                update.IsActive = isActive;
+                update.IsRecursive = isRecursive;
+                update.NextRunDate = nextRunDate;
+                update.JobParameters = Params.GetXML();
+                if (runEvery.HasValue)
+                    update.RunEveryTimeSpanTicks = runEvery.Value.Ticks;
+                else
+                    update.RunEveryTimeSpanTicks = null;
+
+                BeforeSaveChanges(db, update);
+                db.SaveChanges();
+                db.Detach(update);
+                SetJobScheduler(update);
+
+            }
+
+            return new AddJobResponse { IsOK = true };
+        }
+
+        /// <summary>
+        /// אירוע שרץ לפני שמירה של הנתונים
+        /// במידה וצריך לעדכן עוד נתונים ולשמור על טרנזקציה
+        /// </summary>
+        /// <param name="db"></param>
+        /// <param name="update"></param>
+        protected virtual void BeforeSaveChanges(Entities db, DB.JobScheduler update)
+        {
+        }
+
+        #endregion
+
+        #region Events
+
+        public event EventHandler MarkStartStarting;
+        public event EventHandler MarkStartStarted;
+        public event EventHandler RunJob;
+        public event EventHandler MarEndStarting;
+        public event EventHandler MarkEndStarted;
+
+
+        protected void OnMarkStartStarting()
+        {
+            if (MarkStartStarting != null)
+                MarkStartStarting(this, null);
+        }
+        protected void OnMarkStartStarted()
+        {
+            if (MarkStartStarted != null)
+                MarkStartStarted(this, null);
+        }
+        protected void OnRunJob()
+        {
+            if (RunJob != null)
+                RunJob(this, null);
+        }
+        protected void OnMarEndStarting()
+        {
+            if (MarEndStarting != null)
+                MarEndStarting(this, null);
+        }
+        protected void OnMarkEndStarted()
+        {
+            if (MarkEndStarted != null)
+                MarkEndStarted(this, null);
+        }
+
+        #endregion
+
+        #region Write Exception To Log
+        internal void WriteExceptionToLog(Exception ex, string Info = "")
+        {
+            if (Info == null)
+                Info = string.Empty;
+            using (var db = GlobDB.GetNewEntities())
+            {
+                JobSchedulerLog log = new JobSchedulerLog
+                {
+                    JobSchedulerID = JobScheduler.ID,
+                    CreateDate = DateTime.Now,
+                    LogType = (int)LogTypeEnum.Error,
+                    Massage = (Info + " " + ex.Message).MaxLen(250),
+                    Exception = ex.ToString(),
+                };
+                db.JobSchedulerLog.AddObject(log);
+                db.SaveChanges();
+            }
+        }
+
+        internal void WriteDebugToLog(string Massage, string LongMassage)
+        {
+            using (var db = GlobDB.GetNewEntities())
+            {
+                JobSchedulerLog log = new JobSchedulerLog
+                {
+                    JobSchedulerID = JobScheduler.ID,
+                    CreateDate = DateTime.Now,
+                    LogType = (int)LogTypeEnum.DebugInfo,
+                    Massage = (Massage).MaxLen(250),
+                    Exception = LongMassage,
+                };
+                db.JobSchedulerLog.AddObject(log);
+                db.SaveChanges();
+            }
+        }
+        #endregion
+
+        #region  Start and End
+        /// <summary>
+        /// מסמן משימה רצה
+        /// </summary>
+        internal void Start()
+        {
+            DB.JobScheduler dbjobScheduler = _db.JobScheduler.Single(a => a.ID == JobScheduler.ID);
+            dbjobScheduler.IsRunning = true;
+            _db.SaveChanges();
+        }
+
+        /// <summary>
+        /// מסמן סיום משימה + הקפצה הפעלה של משימה
+        /// </summary>
+        internal void End()
+        {
+            DB.JobScheduler dbjobScheduler = _db.JobScheduler.Single(a => a.ID == JobScheduler.ID);
+            dbjobScheduler.IsRunning = false;
+            // אם משימה מחזורת יש לבטל את המשימה
+            dbjobScheduler.IsActive = dbjobScheduler.IsRecursive;
+            dbjobScheduler.LestRunDate = DateTime.Now.GetToSql();
+            UpdateNextRunDate(dbjobScheduler);
+            _db.SaveChanges();
+        }
+
+        protected virtual void UpdateNextRunDate(DB.JobScheduler dbjobScheduler)
+        {
+            // אם אין תיקים המשימה לא תרוץ
+            if (dbjobScheduler.RunEveryTimeSpanTicks.HasValue)
+            {
+                dbjobScheduler.NextRunDate = dbjobScheduler.NextRunDate.AddTicks(dbjobScheduler.RunEveryTimeSpanTicks.Value);
+                if (dbjobScheduler.NextRunDate <= DateTime.Now)
+                    dbjobScheduler.NextRunDate = DateTime.Now.AddMinutes(1).GetToSql();
+            }
+            else
+            {
+                dbjobScheduler.IsActive = false;
+            }
+        }
+        #endregion
+
+        #region IDisposable
+        // http://msdn.microsoft.com/en-us/library/ms244737(v=vs.80).aspx
+        ~JobSchedulerBase()
+        {
+            // Finalizer calls Dispose(false)
+            Dispose(false);
+
+        }
+        // Dispose() calls Dispose(true)
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+
+        }
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // free managed resources
+                if (_db != null)
+                {
+                    _db.Dispose();
+                    _db = null;
+                }
+            }
+            // free native resources if there are any.
+        }
+
+        #endregion
+
+    }
+}
