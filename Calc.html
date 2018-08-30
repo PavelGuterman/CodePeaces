@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Navigation Functions (Heading)</title>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <meta charset="utf-8">
+     <link rel="stylesheet" href="~/bootstrap.css" />
+        <link rel="stylesheet" href="~/site.css" />
+    <style>
+      /* Always set the map height explicitly to define the size of the div
+       * element that contains the map. */
+     #map {
+            height: 400px; /* The height is 400 pixels */
+            width: 100%; /* The width is the width of the web page */
+        }
+      /* Optional: Makes the sample page fill the window. */
+      html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+      #floating-panel {
+        position: absolute;
+        top: 10px;
+        left: 25%;
+        z-index: 5;
+        background-color: #fff;
+        padding: 5px;
+        border: 1px solid #999;
+        text-align: center;
+        font-family: 'Roboto','sans-serif';
+        line-height: 30px;
+        padding-left: 10px;
+      }
+    </style>
+  </head>
+  <body>
+<h2>מחשבון משלוחה</h2>
+
+<form id="form" action="DistanceCalc/GetDeliveryPrice" method="post">
+
+    <div class="form-group">
+        <label for="origin">מאיפה:</label>
+        <input type="tel" class="form-control" id="origin" name="origin">
+    </div>
+    <div class="form-group">
+        <label for="dest">לאן:</label>
+        <input type="text" class="form-control" id="dest" name="dest">
+    </div>
+    <div class="form-group">
+        <label for="dest">מחיר:</label>
+        <input type="text" class="form-control" id="price" name="price">
+    </div>
+    <div class="form-group">
+        <label for="dest">משקל:</label>
+        <input type="text" class="form-control" id="wieght" name="wieght">
+    </div>
+
+    <button type="submit" class="btn btn-primary">Submit</button>
+
+    <div id="map"></div>
+
+</form>
+
+<script type="text/javascript">
+
+
+    if (form.addEventListener) {
+        form.addEventListener("submit", callback, false);  //Modern browsers
+    } else if (form.attachEvent) {
+        form.attachEvent('onsubmit', callback);            //Old IE
+    }
+    var fromAdressProcessedOk = false;
+    var ToAdressProcessedOk = false;
+
+    function callback(e) {
+        e.preventDefault();       
+        var uluru = { lat: 32.081058, lng: 34.781602 };
+        var geocoder = new google.maps.Geocoder();
+        var from = document.getElementById("origin").value;
+        var toadress = document.getElementById("dest").value;
+        var price = document.getElementById("price").value;
+        var wieght = document.getElementById("wieght").value;
+
+        var bounds = new google.maps.LatLngBounds();
+        var map = new google.maps.Map(document.getElementById("map"), { zoom: 12, center: uluru });
+        var geocoder2 = new google.maps.Geocoder();
+        geocoder.geocode({
+            'address': from
+        }, function (results, status) {
+
+            if (status == google.maps.GeocoderStatus.OK) {
+                var marker = new google.maps.Marker({
+                    position: results[0].geometry.location,
+                    map: map,
+                });
+                bounds.extend(results[0].geometry.location);
+                geocoder2.geocode({
+                    'address': toadress
+                }, function (results1, status1) {
+                    if (status1 == google.maps.GeocoderStatus.OK) {
+                        var marker2 = new google.maps.Marker({
+                            position: results1[0].geometry.location,
+                            map: map,
+                        });
+                        bounds.extend(results1[0].geometry.location);
+                        map.fitBounds(bounds);
+
+                        poly = new google.maps.Polyline({
+                            strokeColor: '#FF0000',
+                            strokeOpacity: 1.0,
+                            strokeWeight: 3,
+                            map: map,
+                        });
+
+                        geodesicPoly = new google.maps.Polyline({
+                            strokeColor: '#CC0099',
+                            strokeOpacity: 1.0,
+                            strokeWeight: 3,
+                            geodesic: true,
+                            map: map
+                        });
+                        var path = [marker.getPosition(), marker2.getPosition()];
+                        poly.setPath(path);
+                        geodesicPoly.setPath(path);
+                        
+                        var d = (google.maps.geometry.spherical.computeDistanceBetween(marker.getPosition(), marker2.getPosition())).toFixed(2);
+                        alert('Cost: ' + d * price * wieght);
+                    } else {
+                        alert("Geocode of " + to + " failed," + status1);
+                    }
+                });
+
+
+            } else {
+                alert("Geocode of " + from + " failed," + status);
+            }
+        });
+       
+       
+        fromAdressProcessedOk = false;
+
+        var to = document.getElementById("dest");
+       
+    }
+
+    function ProcessLocation(data) {
+        var adress = '';
+        if (fromAdressProcessedOk == false) {
+            adress = document.getElementById("origin").value;
+        } else {
+            adress = document.getElementById("dest").value;
+        }
+
+        adress = adress.replace(/ /g, '+');
+        var key = "key=AIzaSyAPYMLZBAnb6rj1x8MfYGvpP26BbwQFz5M";
+        var url = "https://maps.googleapis.com/maps/api/place/textsearch/json?query="
+            + adress + "&"
+            + key;
+
+        var option = {
+            url: url,
+            type: "get",
+            dataType: 'json',
+            success: function (data, status, jqxhr) {
+                if (status == 'success') {
+                    if (fromAdressProcessedOk == true) {
+                        if (ToAdressProcessedOk = true) {
+                            ProcessCalc()
+
+                        }
+
+                    } else {
+                        fromAdressProcessedOk = true;
+                        //var data.result
+
+                    }
+
+                }
+
+            }
+        };
+        $.ajax(option).fail(function (data, x, e) {
+            alert("Error");
+        });
+    }
+    function ProcessCalc(data) {
+
+
+    }
+
+    function update() {
+        var path = [marker1.getPosition(), marker2.getPosition()];
+        poly.setPath(path);
+        geodesicPoly.setPath(path);
+        var heading = google.maps.geometry.spherical.computeHeading(path[0], path[1]);
+        document.getElementById('heading').value = heading;
+        document.getElementById('origin').value = path[0].toString();
+        document.getElementById('destination').value = path[1].toString();
+    }
+
+
+    function initMap() {
+        // The location of Uluru
+        var uluru = { lat: 32.081058, lng: 34.781602 };
+        // The map, centered at Uluru
+        var map = new google.maps.Map(
+            document.getElementById('map'), { zoom: 8, center: uluru });
+        // The marker, positioned at Uluru
+        //var marker = new google.maps.Marker({ position: uluru, map: map });
+    }
+
+</script>
+
+
+    <footer>
+            <p>&copy; 2018 - DeliveryCalc</p>
+        </footer>
+      <script src="https://ajax.aspnetcdn.com/ajax/jquery/jquery-3.3.1.min.js">
+        </script>
+ <script src="https://ajax.aspnetcdn.com/ajax/bootstrap/3.3.7/bootstrap.min.js">
+        </script>
+      <script async defer src="https://maps.googleapis.com/maps/api/js?language=iw&key=AIzaSyAPYMLZBAnb6rj1x8MfYGvpP26BbwQFz5M&callback=initMap&libraries=geometry">
+    </script>
+  </body>
+</html>
